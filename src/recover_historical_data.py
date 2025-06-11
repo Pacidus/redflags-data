@@ -16,8 +16,6 @@ import json
 from io import StringIO
 import asyncio
 import aiohttp
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Tuple
 
 from data_backend import Config, DataProcessor, ParquetManager
 from data_backend.utils import retry_on_network_error

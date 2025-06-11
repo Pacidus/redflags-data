@@ -85,28 +85,6 @@ class _Config:
         ("source", "sources", "source_code"),
     ]
 
-    # Chart configuration
-    CHART_COLORS = {
-        "primary": "#e74c3c",
-        "secondary": "#c0392b",
-        "accent": "#ff6b6b",
-        "background": "#1a1a1a",
-        "wealth": ("#404040", "#1a1a1a"),
-        "count": ("#3a3a3a", "#222222"),
-        "average": ("#383838", "#1f1f1f"),
-    }
-
-    # Site generation
-    SITE_NAME = "Red Flags Profits"
-    SITE_DESCRIPTION = "Wealth Monopolization Analysis"
-
-    # Reference values for calculations
-    DEFAULT_METRICS = {
-        "median_household_income": 80610,
-        "median_worker_annual": 59540,
-        "median_lifetime_earnings": 1_420_000,
-    }
-
     # Request headers
     HEADERS = {
         "authority": "www.forbes.com",

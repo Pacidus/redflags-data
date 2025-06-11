@@ -2,7 +2,6 @@
 
 import json
 import pandas as pd
-import numpy as np
 import ast
 
 from .config import Config
@@ -41,8 +40,8 @@ class DataProcessor:
 
     def add_inflation_data(self, df, cpi_value, pce_value):
         """Add inflation columns with status logging."""
-        df["cpi_u"] = cpi_value or np.nan
-        df["pce"] = pce_value or np.nan
+        df["cpi_u"] = cpi_value or pd.NA
+        df["pce"] = pce_value or pd.NA
 
         status = "✅" if cpi_value and pce_value else "⚠️"
         self.logger.info(

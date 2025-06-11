@@ -9,12 +9,10 @@ FIXED VERSION - resolves pandas boolean ambiguity issues.
 
 import logging
 import pandas as pd
-import numpy as np
 import sys
 import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
-from collections import defaultdict
 
 # Add src to path to import existing data_backend
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -401,9 +399,9 @@ class StandaloneDataMaintenance:
 
         # Ensure inflation columns exist
         if "cpi_u" not in df_copy.columns:
-            df_copy["cpi_u"] = np.nan
+            df_copy["cpi_u"] = pd.NA
         if "pce" not in df_copy.columns:
-            df_copy["pce"] = np.nan
+            df_copy["pce"] = pd.NA
 
         for date, values in inflation_data.items():
             mask = df_copy["crawl_date"].dt.date == date
