@@ -231,6 +231,7 @@ def apply_repairs_pipeline(
     enable_0th=True,
     enable_1st=True,
     enable_2nd=True,
+    enable_3rd=True,
 ):
     """
     Apply repair pipeline with optimization for incremental updates.
@@ -240,7 +241,7 @@ def apply_repairs_pipeline(
         new_df: Just the new data being added
         dataset_type: 'billionaires' or 'assets'
         enable_repairs: Whether to apply any repairs
-        enable_0th/1st/2nd: Whether to apply specific repair orders
+        enable_0th/1st/2nd/3rd: Whether to apply specific repair orders
 
     Returns:
         Repaired dataframe
@@ -277,6 +278,7 @@ def apply_repairs_pipeline(
         apply_0th=enable_0th,
         apply_1st=enable_1st,
         apply_2nd=enable_2nd,
+        apply_3rd=enable_3rd,
     )
 
     return repaired
@@ -284,7 +286,7 @@ def apply_repairs_pipeline(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Update Forbes dataset with integrated repairs"
+        description="Update Forbes dataset with integrated repairs and deduplication"
     )
     parser.add_argument("--parquet-dir", default="data")
     parser.add_argument(
@@ -296,13 +298,24 @@ def main():
     # Repair control arguments
     parser.add_argument("--no-repairs", action="store_true", help="Skip all repairs")
     parser.add_argument(
-        "--no-0th-order", action="store_true", help="Skip 0th order repairs"
+        "--no-0th-order",
+        action="store_true",
+        help="Skip 0th order repairs (whitespace/unknowns)",
     )
     parser.add_argument(
-        "--no-1st-order", action="store_true", help="Skip 1st order repairs"
+        "--no-1st-order",
+        action="store_true",
+        help="Skip 1st order repairs (identity consistency)",
     )
     parser.add_argument(
-        "--no-2nd-order", action="store_true", help="Skip 2nd order repairs"
+        "--no-2nd-order",
+        action="store_true",
+        help="Skip 2nd order repairs (forward/backward fill)",
+    )
+    parser.add_argument(
+        "--no-3rd-order",
+        action="store_true",
+        help="Skip 3rd order repairs (deduplication)",
     )
 
     args = parser.parse_args()
@@ -314,7 +327,7 @@ def main():
     assets_path = parquet_dir / "assets.parquet"
     current_date = datetime.now().strftime("%Y%m%d")
 
-    print("🚀 Forbes Live Data Updater with Integrated Repairs")
+    print("🚀 Forbes Live Data Updater with Integrated Repairs and Deduplication")
     print("=" * 80)
     print(f"📅 Date: {current_date}")
     print(f"📁 Directory: {parquet_dir.absolute()}")
@@ -325,12 +338,14 @@ def main():
     enable_0th = not args.no_0th_order
     enable_1st = not args.no_1st_order
     enable_2nd = not args.no_2nd_order
+    enable_3rd = not args.no_3rd_order
 
     print(f"🔧 Repairs enabled: {enable_repairs}")
     if enable_repairs:
         print(f"   0th order (clean): {enable_0th}")
         print(f"   1st order (identity): {enable_1st}")
         print(f"   2nd order (fill): {enable_2nd}")
+        print(f"   3rd order (deduplication): {enable_3rd}")
 
     session = requests.Session()
     session.headers = {"User-Agent": args.user_agent, "Accept": "application/json"}
@@ -358,6 +373,10 @@ def main():
             print(f"   📊 Billionaires: {len(new_billionaires)} records")
             print(f"   💰 Assets: {len(new_assets)} records")
             print(f"   🔧 Repairs: {enable_repairs}")
+            if enable_repairs:
+                print(
+                    f"      0th={enable_0th}, 1st={enable_1st}, 2nd={enable_2nd}, 3rd={enable_3rd}"
+                )
             return True
 
         # Load existing data
@@ -399,6 +418,7 @@ def main():
             enable_0th,
             enable_1st,
             enable_2nd,
+            enable_3rd,
         )
 
         final_assets = apply_repairs_pipeline(
@@ -409,6 +429,7 @@ def main():
             enable_0th,
             False,  # No 1st order for assets
             False,  # No 2nd order for assets
+            enable_3rd,  # Deduplication for assets
         )
 
         # Save
@@ -423,7 +444,7 @@ def main():
         print(f"💰 Assets: {len(final_assets):,} records")
         if enable_repairs:
             print(
-                f"🔧 Repairs applied: 0th={enable_0th}, 1st={enable_1st}, 2nd={enable_2nd}"
+                f"🔧 Repairs applied: 0th={enable_0th}, 1st={enable_1st}, 2nd={enable_2nd}, 3rd={enable_3rd}"
             )
 
         return True

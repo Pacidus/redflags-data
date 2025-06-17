@@ -389,6 +389,265 @@ def repair_second_order_fields(
 
 
 # ============================================================================
+# 3RD ORDER REPAIRS (Deduplication)
+# ============================================================================
+
+
+def clean_and_prepare_for_deduplication(
+    df: pl.DataFrame, dataset_type: str
+) -> pl.DataFrame:
+    """
+    Clean data and prepare for deduplication.
+    Remove records with missing essential identifiers.
+    """
+    print(f"🧹 3rd order: Preparing {dataset_type} for deduplication")
+
+    if dataset_type == "billionaires":
+        # Remove records where BOTH personName and lastName are missing/empty
+        condition = (pl.col("personName").is_null()) & (pl.col("lastName").is_null())
+        df_clean = df.filter(~condition)
+    elif dataset_type == "assets":
+        # Remove records with missing personName
+        condition = pl.col("personName").is_null()
+        df_clean = df.filter(~condition)
+    else:
+        print(f"   ⚠️ Unknown dataset type: {dataset_type}")
+        return df
+
+    removed = len(df) - len(df_clean)
+    if removed > 0:
+        print(f"   ⚠️  Removed {removed:,} records with missing identifiers")
+
+    return df_clean
+
+
+def deduplicate_billionaires(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Deduplicate billionaires data keeping the record with highest finalWorth.
+
+    Deduplication key: date|personName|lastName
+    Sort criterion: finalWorth (highest first)
+    """
+    print("🔄 3rd order: Deduplicating billionaires...")
+
+    # Create deduplication key
+    df_keyed = df.with_columns(
+        pl.concat_str(
+            [
+                pl.col("date").cast(pl.Utf8),
+                pl.col("personName").fill_null(""),
+            ],
+            separator="|",
+        ).alias("dedup_key")
+    )
+
+    # Convert finalWorth to decimal for proper sorting
+    df_keyed = df_keyed.with_columns(
+        pl.when(pl.col("finalWorth").is_null())
+        .then(pl.lit(0).cast(pl.Decimal(precision=18, scale=8)))
+        .otherwise(pl.col("finalWorth"))
+        .alias("finalWorth_for_sort")
+    )
+
+    # Sort by dedup_key (ascending) and finalWorth (descending - highest first)
+    df_sorted = df_keyed.sort(
+        ["dedup_key", "finalWorth_for_sort"], descending=[False, True]
+    )
+
+    # Keep first record for each dedup_key (which is the one with highest finalWorth)
+    df_deduped = df_sorted.unique(subset=["dedup_key"], keep="first")
+
+    # Remove temporary columns
+    df_final = df_deduped.drop(["dedup_key", "finalWorth_for_sort"])
+
+    removed = len(df) - len(df_final)
+    print(f"   ✅ Removed {removed:,} duplicate records")
+
+    return df_final
+
+
+def deduplicate_assets(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Deduplicate assets data keeping the record with highest numberOfShares.
+
+    Deduplication key: date|personName|ticker|companyName|currencyCode|exchange|interactive|exchangeRate|exerciseOptionPrice
+    Sort criterion: numberOfShares (highest first)
+    """
+    print("🔄 3rd order: Deduplicating assets...")
+
+    # Create comprehensive deduplication key
+    df_keyed = df.with_columns(
+        pl.concat_str(
+            [
+                pl.col("date").cast(pl.Utf8),
+                pl.col("personName").fill_null(""),
+                pl.col("ticker").fill_null(""),
+                pl.col("companyName").fill_null(""),
+                pl.col("currencyCode").fill_null(""),
+                pl.col("exchange").fill_null(""),
+                pl.col("interactive").cast(pl.Utf8).fill_null(""),
+                pl.col("exchangeRate").cast(pl.Utf8).fill_null(""),
+                pl.col("exerciseOptionPrice").cast(pl.Utf8).fill_null(""),
+            ],
+            separator="|",
+        ).alias("dedup_key")
+    )
+
+    # Convert numberOfShares to decimal for proper sorting
+    df_keyed = df_keyed.with_columns(
+        pl.when(pl.col("numberOfShares").is_null())
+        .then(pl.lit(0).cast(pl.Decimal(precision=18, scale=2)))
+        .otherwise(pl.col("numberOfShares"))
+        .alias("numberOfShares_for_sort")
+    )
+
+    # Sort by dedup_key (ascending) and numberOfShares (descending - highest first)
+    df_sorted = df_keyed.sort(
+        ["dedup_key", "numberOfShares_for_sort"], descending=[False, True]
+    )
+
+    # Keep first record for each dedup_key (which is the one with highest numberOfShares)
+    df_deduped = df_sorted.unique(subset=["dedup_key"], keep="first")
+
+    # Remove temporary columns
+    df_final = df_deduped.drop(["dedup_key", "numberOfShares_for_sort"])
+
+    removed = len(df) - len(df_final)
+    print(f"   ✅ Removed {removed:,} duplicate records")
+
+    return df_final
+
+
+def repair_deduplication(
+    df: pl.DataFrame,
+    dataset_type: str,
+) -> pl.DataFrame:
+    """
+    Complete deduplication repair pipeline.
+
+    Args:
+        df: Input dataframe
+        dataset_type: Type of dataset ('billionaires' or 'assets')
+
+    Returns:
+        Deduplicated dataframe
+    """
+    print(f"🔧 3rd order: Deduplication repair for {dataset_type}")
+
+    # Clean and prepare
+    df_clean = clean_and_prepare_for_deduplication(df, dataset_type)
+
+    # Apply deduplication based on dataset type
+    if dataset_type == "billionaires":
+        result = deduplicate_billionaires(df_clean)
+    elif dataset_type == "assets":
+        result = deduplicate_assets(df_clean)
+    else:
+        print(f"   ⚠️ Unsupported dataset type: {dataset_type}")
+        return df
+
+    return result
+
+
+def analyze_duplicates(df: pl.DataFrame, dataset_type: str) -> Dict:
+    """Analyze duplicate patterns before deduplication"""
+    print(f"\n🔍 DUPLICATE ANALYSIS - {dataset_type.upper()}")
+    print("=" * 50)
+
+    stats = {"dataset_type": dataset_type, "total_records": len(df)}
+
+    if dataset_type == "billionaires":
+        # Group by dedup key to find duplicates
+        duplicates = (
+            df.with_columns(
+                pl.concat_str(
+                    [
+                        pl.col("date").cast(pl.Utf8),
+                        pl.col("personName").fill_null(""),
+                    ],
+                    separator="|",
+                ).alias("dedup_key")
+            )
+            .group_by("dedup_key")
+            .agg(
+                [
+                    pl.count().alias("count"),
+                    pl.col("personName").first().alias("person"),
+                    pl.col("finalWorth").min().alias("min_worth"),
+                    pl.col("finalWorth").max().alias("max_worth"),
+                ]
+            )
+            .filter(pl.col("count") > 1)
+            .sort("count", descending=True)
+        )
+
+        stats["duplicate_groups"] = len(duplicates)
+        stats["total_duplicates"] = (
+            duplicates["count"].sum() if len(duplicates) > 0 else 0
+        )
+
+        if len(duplicates) > 0:
+            print(f"Found {len(duplicates):,} duplicate groups")
+            print("Top duplicate examples:")
+            for row in duplicates.head(5).iter_rows(named=True):
+                print(
+                    f"  👤 {row['person']}: {row['count']} records, worth {row['min_worth']} - {row['max_worth']}"
+                )
+        else:
+            print("✅ No duplicates found")
+
+    elif dataset_type == "assets":
+        # Group by dedup key to find duplicates
+        duplicates = (
+            df.with_columns(
+                pl.concat_str(
+                    [
+                        pl.col("date").cast(pl.Utf8),
+                        pl.col("personName").fill_null(""),
+                        pl.col("ticker").fill_null(""),
+                        pl.col("companyName").fill_null(""),
+                        pl.col("currencyCode").fill_null(""),
+                        pl.col("exchange").fill_null(""),
+                        pl.col("interactive").cast(pl.Utf8).fill_null(""),
+                        pl.col("exchangeRate").cast(pl.Utf8).fill_null(""),
+                        pl.col("exerciseOptionPrice").cast(pl.Utf8).fill_null(""),
+                    ],
+                    separator="|",
+                ).alias("dedup_key")
+            )
+            .group_by("dedup_key")
+            .agg(
+                [
+                    pl.count().alias("count"),
+                    pl.col("personName").first().alias("person"),
+                    pl.col("ticker").first().alias("ticker"),
+                    pl.col("numberOfShares").min().alias("min_shares"),
+                    pl.col("numberOfShares").max().alias("max_shares"),
+                ]
+            )
+            .filter(pl.col("count") > 1)
+            .sort("count", descending=True)
+        )
+
+        stats["duplicate_groups"] = len(duplicates)
+        stats["total_duplicates"] = (
+            duplicates["count"].sum() if len(duplicates) > 0 else 0
+        )
+
+        if len(duplicates) > 0:
+            print(f"Found {len(duplicates):,} duplicate groups")
+            print("Top duplicate examples:")
+            for row in duplicates.head(5).iter_rows(named=True):
+                print(
+                    f"  💰 {row['person']} - {row['ticker']}: {row['count']} records, {row['min_shares']} - {row['max_shares']} shares"
+                )
+        else:
+            print("✅ No duplicates found")
+
+    return stats
+
+
+# ============================================================================
 # INTEGRATED REPAIR PIPELINE
 # ============================================================================
 
@@ -400,6 +659,7 @@ def repair_all_orders(
     apply_0th: bool = True,
     apply_1st: bool = True,
     apply_2nd: bool = True,
+    apply_3rd: bool = True,
 ) -> pl.DataFrame:
     """
     Apply all repair orders to dataframe.
@@ -408,9 +668,10 @@ def repair_all_orders(
         df: Input dataframe
         dataset_type: Type of dataset for logging
         people_filter: Optional list of people to focus 1st/2nd order repairs on
-        apply_0th: Whether to apply 0th order repairs
-        apply_1st: Whether to apply 1st order repairs
-        apply_2nd: Whether to apply 2nd order repairs
+        apply_0th: Whether to apply 0th order repairs (whitespace/unknowns)
+        apply_1st: Whether to apply 1st order repairs (identity consistency)
+        apply_2nd: Whether to apply 2nd order repairs (forward/backward fill)
+        apply_3rd: Whether to apply 3rd order repairs (deduplication)
 
     Returns:
         Fully repaired dataframe
@@ -431,6 +692,10 @@ def repair_all_orders(
     # 2nd Order: Forward/backward fill (can be optimized with people_filter)
     if apply_2nd and dataset_type == "billionaires":
         result = repair_second_order_fields(result, people_filter=people_filter)
+
+    # 3rd Order: Deduplication (always apply to all data)
+    if apply_3rd:
+        result = repair_deduplication(result, dataset_type)
 
     print(f"✅ Repair pipeline completed for {len(result):,} records")
     return result
@@ -485,5 +750,10 @@ def analyze_repair_impact(
         print(
             f"Unknown variations: {original_issues['unknown']} → {repaired_issues['unknown']}"
         )
+
+    elif repair_type == "3rd_order":
+        removed = len(original) - len(repaired)
+        stats.update({"duplicates_removed": removed})
+        print(f"Duplicates removed: {removed:,}")
 
     return stats
