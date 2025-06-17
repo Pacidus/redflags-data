@@ -4,77 +4,9 @@ import argparse
 from pathlib import Path
 import sys
 from data_lib import load_data, save_data
+from repairs_lib import repair_second_order_fields, clean_second_order_empty_strings
 
 pl.enable_string_cache()
-
-
-def clean_empty_strings(df):
-    """Convert empty strings to nulls"""
-    fields = ["countryOfCitizenship", "city", "state", "source", "industries"]
-    print(f"🧹 Converting empty strings to nulls for: {', '.join(fields)}")
-
-    existing = [f for f in fields if f in df.columns]
-    if not existing:
-        print("⚠️  No second order fields found")
-        return df, []
-
-    df_clean = df.with_columns(
-        [
-            pl.when(pl.col(f) == "").then(None).otherwise(pl.col(f)).alias(f)
-            for f in existing
-        ]
-    )
-
-    for f in existing:
-        empty_count = df.select((pl.col(f) == "").sum()).item()
-        if empty_count > 0:
-            print(f"   🔄 {f}: converted {empty_count:,} empty strings")
-
-    return df_clean, existing
-
-
-def apply_fill(df, field):
-    """Apply forward/backward fill to field"""
-    print(f"   🪟 Processing {field}...")
-
-    # Forward fill
-    df_fwd = df.with_columns(
-        pl.col(field)
-        .fill_null(strategy="forward")
-        .over("personName")
-        .alias(f"{field}_tmp")
-    )
-
-    # Backward fill remaining
-    df_filled = df_fwd.with_columns(
-        pl.col(f"{field}_tmp")
-        .fill_null(strategy="backward")
-        .over("personName")
-        .alias(field)
-    ).drop(f"{field}_tmp")
-
-    return df_filled
-
-
-def repair_fields(df_clean, fields):
-    """Apply forward/backward fill to all fields"""
-    print(f"\n🔧 APPLYING FORWARD/BACKWARD FILL")
-    print("=" * 60)
-    print(f"📊 Processing {len(fields)} fields")
-
-    # Sort first
-    print("📊 Sorting by personName and date...")
-    df_sorted = df_clean.sort(["personName", "date"])
-
-    # Process each field
-    repaired = df_sorted
-    for i, field in enumerate(fields, 1):
-        print(f"🔄 Field {i}/{len(fields)}: {field}")
-        repaired = apply_fill(repaired, field)
-        print(f"   ✅ Completed {field}")
-
-    print(f"✅ Applied fill to all {len(fields)} fields")
-    return repaired
 
 
 def analyze_results(original, repaired, fields):
@@ -178,7 +110,7 @@ def show_examples(original, repaired, fields, n=2):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Second order repair with forward/backward fill"
+        description="Second order repair with forward/backward fill using repairs library"
     )
     parser.add_argument("--parquet-dir", default="data")
     parser.add_argument("--output", default="billionaires_second_order_repaired")
@@ -191,7 +123,7 @@ def main():
     input_path = Path(args.parquet_dir) / "billionaires.parquet"
     output_path = Path(args.parquet_dir) / f"{args.output}.{args.format}"
 
-    print("🔧 SECOND ORDER FIELDS REPAIR")
+    print("🔧 SECOND ORDER FIELDS REPAIR (Using Repairs Library)")
     print("=" * 80)
     print(f"📁 Input: {input_path}")
     print(f"🛠️  Fields: countryOfCitizenship, city, state, source, industries")
@@ -203,14 +135,14 @@ def main():
         # Load data
         df = load_data(input_path, "billionaires")
 
-        # Clean empty strings
-        df_clean, fields = clean_empty_strings(df)
+        # Get fields that will be repaired (for analysis)
+        df_clean, fields = clean_second_order_empty_strings(df)
         if not fields:
             print("❌ No fields to repair")
             return False
 
-        # Apply repair
-        repaired = repair_fields(df_clean, fields)
+        # Apply repair using library function
+        repaired = repair_second_order_fields(df)
 
         # Analyze
         stats = analyze_results(df_clean, repaired, fields)

@@ -3,77 +3,69 @@ import polars as pl
 import argparse
 from pathlib import Path
 from data_lib import load_data
+from repairs_lib import count_0th_order_issues
+
+pl.enable_string_cache()
 
 
 def check_dataset(path, name):
-    """Check dataset for 0th order issues"""
+    """Check dataset for 0th order issues using repairs library"""
     print(f"\n {name.upper()}")
     print("-" * 30)
 
     df = load_data(path, name)
 
-    # Get string columns
+    # Use library function to count issues
+    issues = count_0th_order_issues(df)
+
+    # Get string columns for reporting
     string_cols = [
         col for col, dtype in df.schema.items() if dtype in (pl.Utf8, pl.Categorical)
     ]
 
-    if not string_cols:
-        print("No string columns")
-        return {"whitespace": 0, "unknown": 0, "examples": []}
-
     print(f"String columns: {len(string_cols)}")
-
-    # Pattern for unknown values - only match "unknown" and "unknown_123" style
-    unk_pattern = r"(?i)^(unknown|unknown_-?\d+)$"
-
-    issues = {"whitespace": 0, "unknown": 0, "examples": []}
-
-    for col in string_cols:
-        col_str = pl.col(col).cast(pl.Utf8)
-
-        # Whitespace
-        ws = df.filter(
-            col_str.is_not_null() & (col_str != col_str.str.strip_chars())
-        ).height
-
-        # Unknown variations
-        unk = df.filter(
-            col_str.is_not_null() & col_str.str.contains(unk_pattern)
-        ).height
-
-        if ws or unk:
-            print(f"  {col}: {ws} whitespace, {unk} unknown variations")
-
-        issues["whitespace"] += ws
-        issues["unknown"] += unk
-
-        # Examples
-        if ws:
-            val = (
-                df.filter(col_str != col_str.str.strip_chars())
-                .select(col)
-                .get_column(col)
-                .head(1)[0]
-            )
-            issues["examples"].append(f"{name}.{col}: '{val}' → '{val.strip()}'")
-
-        if unk:
-            val = (
-                df.filter(col_str.str.contains(unk_pattern))
-                .select(col)
-                .get_column(col)
-                .head(1)[0]
-            )
-            issues["examples"].append(
-                f"{name}.{col}: '{val}' → NULL (unknown variation)"
-            )
-
     print(f"Total issues: {issues['whitespace'] + issues['unknown']:,}")
-    return issues
+
+    # Get examples
+    examples = []
+    if issues["whitespace"] > 0:
+        # Find a whitespace example
+        for col in string_cols:
+            col_str = pl.col(col).cast(pl.Utf8)
+            ws_rows = df.filter(
+                col_str.is_not_null() & (col_str != col_str.str.strip_chars())
+            ).head(1)
+            if len(ws_rows) > 0:
+                val = ws_rows.get_column(col)[0]
+                examples.append(f"{name}.{col}: '{val}' → '{val.strip()}'")
+                break
+
+    if issues["unknown"] > 0:
+        # Find an unknown example
+        import re
+
+        unk_pattern = r"(?i)^(unknown|unknown_-?\d+)$"
+        for col in string_cols:
+            col_str = pl.col(col).cast(pl.Utf8)
+            unk_rows = df.filter(
+                col_str.is_not_null() & col_str.str.contains(unk_pattern)
+            ).head(1)
+            if len(unk_rows) > 0:
+                val = unk_rows.get_column(col)[0]
+                examples.append(f"{name}.{col}: '{val}' → NULL (unknown variation)")
+                break
+
+    return {
+        "whitespace": issues["whitespace"],
+        "unknown": issues["unknown"],
+        "examples": examples,
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="0th order check")
+    parser = argparse.ArgumentParser(
+        description="0th order check using repairs library"
+    )
     parser.add_argument("--parquet-dir", default="data")
     parser.add_argument(
         "--dataset", choices=["billionaires", "assets", "both"], default="both"
@@ -86,8 +78,8 @@ def main():
         "assets": dir / "assets.parquet",
     }
 
-    print("0TH ORDER CHECK")
-    print("=" * 40)
+    print("0TH ORDER CHECK (Using Repairs Library)")
+    print("=" * 50)
 
     results = []
     for name, path in datasets.items():
@@ -121,4 +113,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with pl.StringCache():
+        main()

@@ -4,106 +4,13 @@ import argparse
 from pathlib import Path
 import sys
 from data_lib import load_data, save_data
+from repairs_lib import (
+    repair_identity_consistency,
+    find_canonical_identity_values,
+    apply_identity_fixes,
+)
 
 pl.enable_string_cache()
-
-
-def find_canonical_values(df, id_keys=None):
-    """Find most recent non-null identity values for each person"""
-    if id_keys is None:
-        id_keys = ["personName"]
-
-    print(f"\n🔍 Finding canonical values using: {', '.join(id_keys)}")
-
-    # Fields to fix
-    fix_fields = ["lastName", "birthDate", "gender"]
-
-    # Clean empty strings
-    print("🧹 Converting empty strings to nulls...")
-    df_clean = df.with_columns(
-        [
-            pl.when(pl.col("lastName") == "").then(None).otherwise(pl.col("lastName")),
-            pl.when(pl.col("gender") == "").then(None).otherwise(pl.col("gender")),
-        ]
-    )
-
-    # Get unique identities
-    unique_ids = df_clean.select(id_keys).unique()
-    print(f"👥 Found {len(unique_ids):,} unique identities")
-
-    canonical = []
-
-    for i, id_row in enumerate(unique_ids.iter_rows(named=True)):
-        if (i + 1) % 100 == 0:
-            print(f"   Processing {i + 1:,}/{len(unique_ids):,}...")
-
-        # Build filter
-        filter_expr = None
-        for key in id_keys:
-            val = id_row[key]
-            cond = pl.col(key).is_null() if val is None else pl.col(key) == val
-            filter_expr = cond if filter_expr is None else filter_expr & cond
-
-        person_data = df_clean.filter(filter_expr).sort("date", descending=True)
-        if len(person_data) == 0:
-            continue
-
-        # Build canonical record
-        rec = {col: id_row[col] for col in id_keys}
-
-        # Get most recent non-null value for each field
-        for field in fix_fields:
-            non_null = person_data.filter(pl.col(field).is_not_null())
-            rec[field] = non_null[field][0] if len(non_null) > 0 else None
-
-        canonical.append(rec)
-
-    # Convert to dataframe with matching types
-    canonical_df = pl.DataFrame(canonical)
-    for col in id_keys + fix_fields:
-        if col in df.columns and col in canonical_df.columns:
-            canonical_df = canonical_df.with_columns(pl.col(col).cast(df.schema[col]))
-
-    print(f"✅ Found canonical values for {len(canonical_df):,} identities")
-    return canonical_df
-
-
-def apply_fixes(df, canonical_df, id_keys):
-    """Apply canonical values to all records"""
-    print(f"\n🔧 Applying fixes to {len(df):,} records...")
-
-    # Clean empty strings
-    df_clean = df.with_columns(
-        [
-            pl.when(pl.col("lastName") == "").then(None).otherwise(pl.col("lastName")),
-            pl.when(pl.col("gender") == "").then(None).otherwise(pl.col("gender")),
-        ]
-    )
-
-    # Join with canonical values
-    fixed = df_clean.join(
-        canonical_df.select(id_keys + ["lastName", "birthDate", "gender"]).rename(
-            {
-                "lastName": "new_lastName",
-                "birthDate": "new_birthDate",
-                "gender": "new_gender",
-            }
-        ),
-        on=id_keys,
-        how="left",
-    )
-
-    # Replace with canonical values
-    fixed = fixed.with_columns(
-        [
-            pl.col("new_lastName").alias("lastName"),
-            pl.col("new_birthDate").alias("birthDate"),
-            pl.col("new_gender").alias("gender"),
-        ]
-    ).drop(["new_lastName", "new_birthDate", "new_gender"])
-
-    print("✅ Applied fixes")
-    return fixed
 
 
 def analyze_fixes(original, fixed, id_keys):
@@ -115,8 +22,14 @@ def analyze_fixes(original, fixed, id_keys):
     # Clean original for comparison
     orig_clean = original.with_columns(
         [
-            pl.when(pl.col("lastName") == "").then(None).otherwise(pl.col("lastName")),
-            pl.when(pl.col("gender") == "").then(None).otherwise(pl.col("gender")),
+            pl.when(pl.col("lastName") == "")
+            .then(None)
+            .otherwise(pl.col("lastName"))
+            .alias("lastName"),
+            pl.when(pl.col("gender") == "")
+            .then(None)
+            .otherwise(pl.col("gender"))
+            .alias("gender"),
         ]
     )
 
@@ -163,8 +76,14 @@ def show_examples(original, fixed, id_keys, n=3):
     # Clean original
     orig_clean = original.with_columns(
         [
-            pl.when(pl.col("lastName") == "").then(None).otherwise(pl.col("lastName")),
-            pl.when(pl.col("gender") == "").then(None).otherwise(pl.col("gender")),
+            pl.when(pl.col("lastName") == "")
+            .then(None)
+            .otherwise(pl.col("lastName"))
+            .alias("lastName"),
+            pl.when(pl.col("gender") == "")
+            .then(None)
+            .otherwise(pl.col("gender"))
+            .alias("gender"),
         ]
     )
 
@@ -226,7 +145,9 @@ def show_examples(original, fixed, id_keys, n=3):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fix identity inconsistencies")
+    parser = argparse.ArgumentParser(
+        description="Fix identity inconsistencies using repairs library"
+    )
     parser.add_argument("--parquet-dir", default="data")
     parser.add_argument("--output", default="billionaires_fixed_identities")
     parser.add_argument("--format", choices=["parquet", "csv"], default="parquet")
@@ -239,7 +160,7 @@ def main():
     input_path = Path(args.parquet_dir) / "billionaires.parquet"
     output_path = Path(args.parquet_dir) / f"{args.output}.{args.format}"
 
-    print("🔧 BILLIONAIRE IDENTITY REPAIR")
+    print("🔧 BILLIONAIRE IDENTITY REPAIR (Using Repairs Library)")
     print("=" * 80)
     print(f"📁 Input: {input_path}")
     print(f"🔑 Keys: {', '.join(args.identity_keys)}")
@@ -251,11 +172,12 @@ def main():
         # Load data
         df = load_data(input_path, "billionaires")
 
-        # Find canonical values
-        canonical = find_canonical_values(df, args.identity_keys)
-
-        # Apply fixes
-        fixed = apply_fixes(df, canonical, args.identity_keys)
+        # Apply repair using library function
+        fixed = repair_identity_consistency(
+            df,
+            id_keys=args.identity_keys,
+            fix_fields=["lastName", "birthDate", "gender"],
+        )
 
         # Analyze
         stats = analyze_fixes(df, fixed, args.identity_keys)

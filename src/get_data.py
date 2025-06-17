@@ -7,6 +7,7 @@ from pathlib import Path
 import argparse
 import sys
 from data_lib import load_data, save_data, get_schema, create_empty
+from repairs_lib import repair_all_orders, get_people_in_new_data
 
 
 def fetch_forbes_data(session):
@@ -222,14 +223,88 @@ def update_dataset(new_df, existing_df, current_date_obj, dataset_name):
     return combined
 
 
+def apply_repairs_pipeline(
+    combined_df,
+    new_df,
+    dataset_type,
+    enable_repairs=True,
+    enable_0th=True,
+    enable_1st=True,
+    enable_2nd=True,
+):
+    """
+    Apply repair pipeline with optimization for incremental updates.
+
+    Args:
+        combined_df: Full dataset including new data
+        new_df: Just the new data being added
+        dataset_type: 'billionaires' or 'assets'
+        enable_repairs: Whether to apply any repairs
+        enable_0th/1st/2nd: Whether to apply specific repair orders
+
+    Returns:
+        Repaired dataframe
+    """
+    if not enable_repairs:
+        print(f"🔄 Skipping repairs for {dataset_type}")
+        return combined_df
+
+    print(f"\n🔧 APPLYING REPAIRS TO {dataset_type.upper()}")
+    print("=" * 60)
+
+    # For billionaires, we can optimize by focusing on people in new data
+    if dataset_type == "billionaires":
+        # Get people who appear in new data
+        people_in_new_data = get_people_in_new_data(new_df)
+
+        if people_in_new_data:
+            print(
+                f"🎯 Optimization: Focusing repairs on {len(people_in_new_data)} people from new data"
+            )
+            people_filter = people_in_new_data
+        else:
+            print(f"⚠️  No people found in new data, applying repairs to all data")
+            people_filter = None
+    else:
+        # For assets, no person-based optimization needed
+        people_filter = None
+
+    # Apply repair pipeline
+    repaired = repair_all_orders(
+        combined_df,
+        dataset_type=dataset_type,
+        people_filter=people_filter,
+        apply_0th=enable_0th,
+        apply_1st=enable_1st,
+        apply_2nd=enable_2nd,
+    )
+
+    return repaired
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Update Forbes dataset")
+    parser = argparse.ArgumentParser(
+        description="Update Forbes dataset with integrated repairs"
+    )
     parser.add_argument("--parquet-dir", default="data")
     parser.add_argument(
         "--user-agent", default="Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N)"
     )
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--dry-run", action="store_true")
+
+    # Repair control arguments
+    parser.add_argument("--no-repairs", action="store_true", help="Skip all repairs")
+    parser.add_argument(
+        "--no-0th-order", action="store_true", help="Skip 0th order repairs"
+    )
+    parser.add_argument(
+        "--no-1st-order", action="store_true", help="Skip 1st order repairs"
+    )
+    parser.add_argument(
+        "--no-2nd-order", action="store_true", help="Skip 2nd order repairs"
+    )
+
     args = parser.parse_args()
 
     parquet_dir = Path(args.parquet_dir)
@@ -239,11 +314,23 @@ def main():
     assets_path = parquet_dir / "assets.parquet"
     current_date = datetime.now().strftime("%Y%m%d")
 
-    print("🚀 Forbes Live Data Updater")
-    print("=" * 60)
+    print("🚀 Forbes Live Data Updater with Integrated Repairs")
+    print("=" * 80)
     print(f"📅 Date: {current_date}")
     print(f"📁 Directory: {parquet_dir.absolute()}")
     print(f"🔒 Dry run: {args.dry_run}")
+
+    # Repair settings
+    enable_repairs = not args.no_repairs
+    enable_0th = not args.no_0th_order
+    enable_1st = not args.no_1st_order
+    enable_2nd = not args.no_2nd_order
+
+    print(f"🔧 Repairs enabled: {enable_repairs}")
+    if enable_repairs:
+        print(f"   0th order (clean): {enable_0th}")
+        print(f"   1st order (identity): {enable_1st}")
+        print(f"   2nd order (fill): {enable_2nd}")
 
     session = requests.Session()
     session.headers = {"User-Agent": args.user_agent, "Accept": "application/json"}
@@ -270,6 +357,7 @@ def main():
             print(f"\n🔍 DRY RUN - Would process:")
             print(f"   📊 Billionaires: {len(new_billionaires)} records")
             print(f"   💰 Assets: {len(new_assets)} records")
+            print(f"   🔧 Repairs: {enable_repairs}")
             return True
 
         # Load existing data
@@ -284,31 +372,59 @@ def main():
             else create_empty("assets")
         )
 
-        # Update datasets
+        # Update datasets (combine new with existing)
         current_date_obj = datetime.strptime(current_date, "%Y%m%d").date()
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 80)
         print("UPDATING BILLIONAIRES")
-        final_billionaires = update_dataset(
+        combined_billionaires = update_dataset(
             new_billionaires, existing_billionaires, current_date_obj, "billionaires"
         )
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 80)
         print("UPDATING ASSETS")
-        final_assets = update_dataset(
+        combined_assets = update_dataset(
             new_assets, existing_assets, current_date_obj, "assets"
         )
 
+        # Apply repairs
+        print("\n" + "=" * 80)
+        print("REPAIR PIPELINE")
+
+        final_billionaires = apply_repairs_pipeline(
+            combined_billionaires,
+            new_billionaires,
+            "billionaires",
+            enable_repairs,
+            enable_0th,
+            enable_1st,
+            enable_2nd,
+        )
+
+        final_assets = apply_repairs_pipeline(
+            combined_assets,
+            new_assets,
+            "assets",
+            enable_repairs,
+            enable_0th,
+            False,  # No 1st order for assets
+            False,  # No 2nd order for assets
+        )
+
         # Save
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 80)
         print("SAVING DATASETS")
         save_data(final_billionaires, billionaires_path, "billionaires")
         save_data(final_assets, assets_path, "assets")
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 80)
         print("✅ UPDATE COMPLETED")
         print(f"📊 Billionaires: {len(final_billionaires):,} records")
         print(f"💰 Assets: {len(final_assets):,} records")
+        if enable_repairs:
+            print(
+                f"🔧 Repairs applied: 0th={enable_0th}, 1st={enable_1st}, 2nd={enable_2nd}"
+            )
 
         return True
 
