@@ -4,22 +4,11 @@ import argparse
 from pathlib import Path
 import sys
 
+# Import our data library
+from data_lib import load_billionaires_data, save_billionaires_data
+
 # Enable string cache to handle categorical comparisons
 pl.enable_string_cache()
-
-
-def load_billionaires_data(parquet_path):
-    """Load billionaires dataset from parquet file"""
-    if not parquet_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {parquet_path}")
-
-    print(f"📖 Loading billionaires dataset from {parquet_path}")
-    df = pl.read_parquet(parquet_path)
-    print(f"✅ Loaded {len(df):,} records")
-    print(f"👥 Unique person names: {df['personName'].n_unique():,}")
-    print(f"📅 Date range: {df['date'].min()} to {df['date'].max()}")
-
-    return df
 
 
 def clean_empty_strings(df):
@@ -247,23 +236,6 @@ def show_examples(original_df, repaired_df, fields_repaired, num_examples=2):
     )
 
 
-def save_repaired_data(repaired_df, output_path, format_type="parquet"):
-    """Save the repaired dataset"""
-
-    print(f"\n💾 Saving repaired dataset to {output_path}")
-
-    if format_type.lower() == "csv":
-        repaired_df.write_csv(output_path)
-    elif format_type.lower() == "parquet":
-        repaired_df.write_parquet(
-            output_path, compression="brotli", compression_level=11
-        )
-    else:
-        raise ValueError(f"Unsupported format: {format_type}")
-
-    print(f"✅ Saved {len(repaired_df):,} records")
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Apply second order repair using window functions (forward/backward fill)"
@@ -315,7 +287,7 @@ def main():
     print(f"📋 Strategy: Fill nulls with past values, then future values if needed")
 
     try:
-        # Step 1: Load the dataset
+        # Step 1: Load the dataset using our library
         df = load_billionaires_data(billionaires_path)
 
         # Step 2: Clean empty strings
@@ -336,7 +308,13 @@ def main():
 
         # Step 6: Save results (unless dry run)
         if not args.dry_run:
-            save_repaired_data(repaired_df, output_path, args.format)
+            if args.format == "parquet":
+                # Use our library function for parquet (with proper sorting and compression)
+                save_billionaires_data(repaired_df, output_path)
+            else:
+                # For CSV, write directly
+                repaired_df.write_csv(output_path)
+                print(f"✅ Saved {len(repaired_df):,} records to {output_path}")
         else:
             print(
                 f"\n🔍 DRY RUN - Would save {len(repaired_df):,} records to {output_path}"

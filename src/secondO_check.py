@@ -4,392 +4,208 @@ import argparse
 from pathlib import Path
 import sys
 
-# Enable string cache to handle categorical comparisons
 pl.enable_string_cache()
 
 
-def load_billionaires_data(parquet_path):
-    """Load billionaires dataset from parquet file"""
-    if not parquet_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {parquet_path}")
-
-    print(f"📖 Loading billionaires dataset from {parquet_path}")
-    df = pl.read_parquet(parquet_path)
-    print(f"✅ Loaded {len(df):,} records")
-    print(f"👥 Unique person names: {df['personName'].n_unique():,}")
-    print(f"📅 Date range: {df['date'].min()} to {df['date'].max()}")
-
+def load_data(path):
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset not found: {path}")
+    print(f"📖 Loading dataset from {path}")
+    df = pl.read_parquet(path)
+    print(
+        f"✅ Loaded {len(df):,} records | 👥 Names: {df['personName'].n_unique():,} | 📅 Dates: {df['date'].min()} to {df['date'].max()}"
+    )
     return df
 
 
-def analyze_second_order_fields(df):
-    """Analyze missing data patterns in second order fields"""
+def analyze_fields(df):
+    fields = ["countryOfCitizenship", "city", "state", "source", "industries"]
+    print("\n📊 SECOND ORDER FIELDS ANALYSIS\n" + "=" * 80)
+    print(
+        f"🔍 Analyzing: {', '.join(fields)}\n💡 Fill with: 1. Last non-null 2. Future non-null"
+    )
 
-    # Second order fields that can change through time
-    second_order_fields = [
-        "countryOfCitizenship",
-        "city",
-        "state",
-        "source",
-        "industries",
-    ]
-
-    print(f"\n📊 SECOND ORDER FIELDS ANALYSIS")
-    print("=" * 80)
-    print(f"🔍 Analyzing fields: {', '.join(second_order_fields)}")
-    print(f"💡 These fields can change over time, so nulls should be filled with:")
-    print(f"   1. Last past non-null value (forward fill)")
-    print(f"   2. If no past value, first future non-null value (backward fill)")
-
-    # Clean up empty strings first
+    # Clean data
     df_clean = df.with_columns(
         [
-            pl.when(pl.col(field) == "")
-            .then(None)
-            .otherwise(pl.col(field))
-            .alias(field)
-            for field in second_order_fields
-            if field in df.columns
+            pl.when(pl.col(f) == "").then(None).otherwise(pl.col(f)).alias(f)
+            for f in fields
+            if f in df.columns
         ]
     )
 
-    missing_stats = {}
-
-    print(f"\n📋 Missing Data Summary:")
+    # Missing stats
+    print("\n📋 Missing Data Summary:\n" + "-" * 75)
     print(f"{'Field':<25} {'Null':<10} {'Empty':<10} {'Total Missing':<15} {'%':<8}")
-    print("-" * 75)
-
-    for field in second_order_fields:
-        if field not in df.columns:
-            print(f"{field:<25} {'N/A':<10} {'N/A':<10} {'N/A':<15} {'N/A':<8}")
+    stats = {}
+    for f in fields:
+        if f not in df.columns:
+            print(f"{f:<25} {'N/A':<10} {'N/A':<10} {'N/A':<15} {'N/A':<8}")
             continue
 
-        null_count = df.select(pl.col(field).is_null().sum()).item()
-
-        # Check for empty strings
-        col_dtype = df.schema[field]
-        if col_dtype in [pl.Utf8, pl.Categorical]:
-            empty_count = df.select((pl.col(field) == "").sum()).item()
-        else:
-            empty_count = 0
-
-        total_missing = null_count + empty_count
-        percentage = (total_missing / len(df)) * 100
-
-        missing_stats[field] = {
-            "null": null_count,
-            "empty": empty_count,
-            "total_missing": total_missing,
-            "percentage": percentage,
-        }
-
-        print(
-            f"{field:<25} {null_count:<10} {empty_count:<10} {total_missing:<15} {percentage:<7.1f}%"
+        nulls = df_clean[f].is_null().sum()
+        empties = (
+            (df_clean[f] == "").sum()
+            if df_clean[f].dtype in [pl.Utf8, pl.Categorical]
+            else 0
         )
+        total_missing = nulls + empties
+        pct = total_missing / len(df) * 100
 
-    return missing_stats, df_clean, second_order_fields
+        stats[f] = {"nulls": nulls, "empties": empties}
+        print(f"{f:<25} {nulls:<10} {empties:<10} {total_missing:<15} {pct:<7.1f}%")
+
+    return stats, df_clean, fields
 
 
-def analyze_value_changes_over_time(df_clean, second_order_fields):
-    """Analyze how second order fields change over time for people"""
-
-    print(f"\n📈 VALUE CHANGES OVER TIME ANALYSIS")
-    print("=" * 80)
-
-    change_stats = {}
-
-    for field in second_order_fields:
-        if field not in df_clean.columns:
+def analyze_changes(df, fields):
+    print("\n📈 VALUE CHANGES OVER TIME ANALYSIS\n" + "=" * 80)
+    for f in fields:
+        if f not in df.columns:
             continue
 
-        print(f"\n🔍 Analyzing {field}:")
-
-        # Find people who have multiple different values for this field
-        field_variations = (
-            df_clean.select(["personName", field])
-            .filter(pl.col(field).is_not_null())  # Only non-null values
+        # Get people with multiple values
+        changed = (
+            df.filter(pl.col(f).is_not_null())
+            .select(["personName", f])
             .unique()
             .group_by("personName")
-            .agg(
-                [
-                    pl.col(field).n_unique().alias("unique_values"),
-                    pl.col(field).alias("all_values"),
-                ]
-            )
-            .filter(pl.col("unique_values") > 1)
-            .sort("unique_values", descending=True)
+            .agg(pl.col(f).n_unique().alias("n"))
+            .filter(pl.col("n") > 1)
         )
 
-        total_people_with_data = (
-            df_clean.select(["personName", field])
-            .filter(pl.col(field).is_not_null())
-            .select("personName")
-            .n_unique()
-        )
+        total = df.filter(pl.col(f).is_not_null())["personName"].n_unique()
+        n_changed = len(changed)
 
-        people_with_changes = len(field_variations)
-
-        print(f"   👥 People with non-null {field}: {total_people_with_data:,}")
-        print(f"   🔄 People with multiple values: {people_with_changes:,}")
-
-        if people_with_changes > 0:
-            percentage = (people_with_changes / total_people_with_data) * 100
-            print(f"   📊 Percentage with changes: {percentage:.1f}%")
-
-            # Show distribution of change counts
-            change_distribution = (
-                field_variations.group_by("unique_values")
-                .agg(pl.len().alias("count"))
-                .sort("unique_values")
-            )
-
-            print(f"   📋 Change distribution:")
-            for row in change_distribution.iter_rows(named=True):
-                print(
-                    f"      {row['count']:,} people have {row['unique_values']} different values"
-                )
-
-        change_stats[field] = {
-            "total_people": total_people_with_data,
-            "people_with_changes": people_with_changes,
-            "field_variations": field_variations,
-        }
-
-    return change_stats
+        print(f"\n🔍 {f}:\n   👥 With data: {total:,} | 🔄 Changed: {n_changed:,}")
+        if n_changed:
+            pct = n_changed / total * 100
+            dist = changed.group_by("n").agg(pl.len()).sort("n")
+            print(f"   📊 Changed: {pct:.1f}% | 📋 Distribution:")
+            for row in dist.iter_rows():
+                print(f"      {row[1]:,} people → {row[0]} values")
 
 
-def show_filling_opportunities(df_clean, second_order_fields, sample_size=5):
-    """Show examples of records that would benefit from forward/backward filling"""
+def show_opportunities(df, fields, n=5):
+    print("\n🔧 FILLING OPPORTUNITIES ANALYSIS\n" + "=" * 80)
+    print(f"🎯 Examples where filling would help")
 
-    print(f"\n🔧 FILLING OPPORTUNITIES ANALYSIS")
-    print("=" * 80)
-    print(f"🎯 Showing examples where forward/backward fill would help")
-
-    for field in second_order_fields:
-        if field not in df_clean.columns:
+    for f in fields:
+        if f not in df.columns:
             continue
 
-        print(f"\n📝 Field: {field}")
-        print("-" * 40)
-
-        # Find people who have null values but also have non-null values
-        people_with_mixed_data = (
-            df_clean.select(["personName", "date", field])
-            .group_by("personName")
+        print(f"\n📝 Field: {f}\n" + "-" * 40)
+        # Fixed: Added aliases to prevent duplicate column names
+        mixed = (
+            df.group_by("personName")
             .agg(
                 [
-                    pl.col(field).is_null().any().alias("has_nulls"),
-                    pl.col(field).is_not_null().any().alias("has_values"),
+                    pl.col(f).is_null().any().alias("has_nulls"),
+                    pl.col(f).is_not_null().any().alias("has_values"),
                 ]
             )
             .filter(pl.col("has_nulls") & pl.col("has_values"))
-            .select("personName")
-            .head(sample_size)
+            .head(n)
+            .get_column("personName")
         )
 
-        if len(people_with_mixed_data) == 0:
-            print(
-                "   ✅ No filling opportunities found (all people have consistent data)"
-            )
+        if mixed.is_empty():
+            print("   ✅ No filling opportunities found")
             continue
 
-        for person_row in people_with_mixed_data.iter_rows(named=True):
-            person_name = person_row["personName"]
-
-            # Get this person's timeline for this field
-            person_timeline = (
-                df_clean.filter(pl.col("personName") == person_name)
-                .select(["date", field])
-                .sort("date")
+        for name in mixed:
+            timeline = (
+                df.filter(pl.col("personName") == name).select(["date", f]).sort("date")
             )
 
-            print(f"\n   👤 {person_name}:")
-
-            # Show timeline
-            null_dates = []
-            value_dates = []
-
-            for row in person_timeline.iter_rows(named=True):
-                date = row["date"]
-                value = row[field]
-
-                if value is None:
-                    null_dates.append(str(date))
-                else:
-                    value_dates.append(f"{date}: {value}")
-
+            print(f"\n   👤 {name}:")
+            vals = [
+                f"{row[0]}: {row[1]}"
+                for row in timeline.iter_rows()
+                if row[1] is not None
+            ]
+            nulls = [str(row[0]) for row in timeline.iter_rows() if row[1] is None]
             print(
-                f"      📅 Dates with values: {', '.join(value_dates[:3])}{'...' if len(value_dates) > 3 else ''}"
+                f"      📅 Values: {', '.join(vals[:3])}{'...' if len(vals)>3 else ''}"
             )
             print(
-                f"      ❌ Dates with nulls: {', '.join(null_dates[:3])}{'...' if len(null_dates) > 3 else ''}"
+                f"      ❌ Nulls: {', '.join(nulls[:3])}{'...' if len(nulls)>3 else ''}"
             )
 
-            # Show what forward/backward fill would do
-            forward_fill_example = None
-            backward_fill_example = None
-
-            timeline_data = person_timeline.to_dicts()
-
-            # Simulate forward fill
-            last_value = None
-            for i, record in enumerate(timeline_data):
-                if record[field] is not None:
-                    last_value = record[field]
-                elif last_value is not None and forward_fill_example is None:
-                    forward_fill_example = (
-                        f"{record['date']}: NULL → {last_value} (forward fill)"
-                    )
-
-            # Simulate backward fill
-            next_value = None
-            for i in range(len(timeline_data) - 1, -1, -1):
-                record = timeline_data[i]
-                if record[field] is not None:
-                    next_value = record[field]
-                elif next_value is not None and backward_fill_example is None:
-                    backward_fill_example = (
-                        f"{record['date']}: NULL → {next_value} (backward fill)"
-                    )
-
-            if forward_fill_example:
-                print(f"      🔄 Forward fill example: {forward_fill_example}")
-            if backward_fill_example:
-                print(f"      🔙 Backward fill example: {backward_fill_example}")
+            # Find filling examples
+            last_val = None
+            for row in timeline.iter_rows():
+                if row[1] is not None:
+                    last_val = row[1]
+                elif last_val:
+                    print(f"      🔄 Forward fill: {row[0]} → {last_val}")
+                    break
 
 
-def estimate_repair_impact(df_clean, second_order_fields):
-    """Estimate how many nulls would be filled by the repair process"""
+def estimate_impact(df, fields):
+    print("\n📊 REPAIR IMPACT ESTIMATION\n" + "=" * 80)
+    total_before = total_fillable = 0
 
-    print(f"\n📊 REPAIR IMPACT ESTIMATION")
-    print("=" * 80)
-
-    total_nulls_before = 0
-    total_nulls_fillable = 0
-
-    for field in second_order_fields:
-        if field not in df_clean.columns:
+    for f in fields:
+        if f not in df.columns:
             continue
 
-        # Count current nulls
-        current_nulls = df_clean.select(pl.col(field).is_null().sum()).item()
-
-        # Estimate how many could be filled
-        people_with_mixed_data = (
-            df_clean.select(["personName", field])
-            .group_by("personName")
+        nulls = df[f].is_null().sum()
+        # Fixed: Added aliases to prevent duplicate column names
+        mixed = (
+            df.group_by("personName")
             .agg(
                 [
-                    pl.col(field).is_null().any().alias("has_nulls"),
-                    pl.col(field).is_not_null().any().alias("has_values"),
+                    pl.col(f).is_null().any().alias("has_nulls"),
+                    pl.col(f).is_not_null().any().alias("has_values"),
                 ]
             )
             .filter(pl.col("has_nulls") & pl.col("has_values"))
         )
 
-        # Count fillable nulls (rough estimate)
-        fillable_nulls = 0
-        for person_row in people_with_mixed_data.iter_rows(named=True):
-            person_name = person_row["personName"]
-            person_nulls = (
-                df_clean.filter(pl.col("personName") == person_name)
-                .select(pl.col(field).is_null().sum())
-                .item()
-            )
-            fillable_nulls += person_nulls
+        # FIXED: Use implode() to resolve the deprecation warning
+        person_list = mixed.get_column("personName").implode()
+        fillable = df.filter(
+            pl.col("personName").is_in(person_list) & pl.col(f).is_null()
+        ).height
 
-        percentage_fillable = (
-            (fillable_nulls / current_nulls * 100) if current_nulls > 0 else 0
-        )
+        remains = nulls - fillable
+        pct = fillable / nulls * 100 if nulls else 0
 
-        print(f"📝 {field}:")
-        print(f"   Current nulls: {current_nulls:,}")
         print(
-            f"   Potentially fillable: {fillable_nulls:,} ({percentage_fillable:.1f}%)"
+            f"📝 {f}:\n   Current: {nulls:,} | Fillable: {fillable:,} ({pct:.1f}%) | Remains: {remains:,}"
         )
-        print(f"   Would remain null: {current_nulls - fillable_nulls:,}")
+        total_before += nulls
+        total_fillable += fillable
 
-        total_nulls_before += current_nulls
-        total_nulls_fillable += fillable_nulls
-
-    print(f"\n📊 Overall Impact:")
-    print(f"   Total nulls before repair: {total_nulls_before:,}")
-    print(f"   Estimated fillable nulls: {total_nulls_fillable:,}")
-    if total_nulls_before > 0:
-        print(
-            f"   Overall improvement: {(total_nulls_fillable / total_nulls_before * 100):.1f}%"
-        )
+    print(f"\n📊 Overall:\n   Before: {total_before:,} | Fillable: {total_fillable:,}")
+    if total_before:
+        print(f"   Improvement: {total_fillable/total_before*100:.1f}%")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze second order fields for forward/backward fill repair opportunities"
-    )
-    parser.add_argument(
-        "--parquet-dir",
-        default="data",
-        help="Directory containing parquet files (default: data)",
-    )
-    parser.add_argument(
-        "--sample-size",
-        type=int,
-        default=5,
-        help="Number of examples to show per field (default: 5)",
-    )
-
+    parser = argparse.ArgumentParser(description="Analyze second-order fields")
+    parser.add_argument("--parquet-dir", default="data", help="Data directory")
+    parser.add_argument("--sample-size", type=int, default=5, help="Example count")
     args = parser.parse_args()
 
-    # Setup paths
-    parquet_dir = Path(args.parquet_dir)
-    billionaires_path = parquet_dir / "billionaires.parquet"
-
-    print("🔍 SECOND ORDER FIELDS ANALYSIS")
-    print("=" * 80)
-    print(f"📁 Dataset path: {billionaires_path}")
-    print(f"🎯 Analyzing fields that can change over time")
-    print(f"📋 Fields: countryOfCitizenship, city, state, source, industries")
+    path = Path(args.parquet_dir) / "billionaires.parquet"
+    print("🔍 SECOND ORDER ANALYSIS\n" + "=" * 80)
+    print(
+        f"📁 Dataset: {path}\n🎯 Fields: countryOfCitizenship, city, state, source, industries"
+    )
 
     try:
-        # Load the dataset
-        df = load_billionaires_data(billionaires_path)
+        df = load_data(path)
+        stats, df_clean, fields = analyze_fields(df)
+        analyze_changes(df_clean, fields)
+        show_opportunities(df_clean, fields, args.sample_size)
+        estimate_impact(df_clean, fields)
 
-        # Analyze missing data
-        missing_stats, df_clean, second_order_fields = analyze_second_order_fields(df)
-
-        # Analyze value changes over time
-        change_stats = analyze_value_changes_over_time(df_clean, second_order_fields)
-
-        # Show filling opportunities
-        show_filling_opportunities(df_clean, second_order_fields, args.sample_size)
-
-        # Estimate repair impact
-        estimate_repair_impact(df_clean, second_order_fields)
-
-        # Summary
-        print("\n" + "=" * 80)
-        print("📊 SUMMARY")
-        print("=" * 80)
-        print(
-            f"✅ Analysis completed for {len(second_order_fields)} second order fields"
-        )
-
-        total_missing = sum(stats["total_missing"] for stats in missing_stats.values())
-        print(f"📊 Total missing values across all fields: {total_missing:,}")
-
-        fields_with_changes = sum(
-            1
-            for field, stats in change_stats.items()
-            if stats["people_with_changes"] > 0
-        )
-        print(
-            f"🔄 Fields showing value changes over time: {fields_with_changes}/{len(second_order_fields)}"
-        )
-
-        print(f"\n💡 Recommended next step:")
-        print(
-            f"   Run the second order repair script to apply forward/backward filling"
-        )
-
+        print("\n" + "=" * 80 + "\n📊 SUMMARY\n" + "=" * 80)
+        total_missing = sum(s["nulls"] + s["empties"] for s in stats.values())
+        print(f"✅ Analyzed {len(fields)} fields | Total missing: {total_missing:,}")
+        print("💡 Next step: Run repair script for forward/backward filling")
         return True
 
     except Exception as e:

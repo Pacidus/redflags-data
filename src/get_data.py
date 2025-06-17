@@ -7,43 +7,14 @@ from pathlib import Path
 import argparse
 import sys
 
-
-def get_billionaires_schema():
-    """Schema for billionaires data"""
-    return {
-        "date": pl.Date,
-        "personName": pl.Categorical,
-        "lastName": pl.Categorical,
-        "birthDate": pl.Date,
-        "gender": pl.Categorical,
-        "countryOfCitizenship": pl.Categorical,
-        "city": pl.Categorical,
-        "state": pl.Categorical,
-        "source": pl.Categorical,
-        "industries": pl.Categorical,
-        "finalWorth": pl.Decimal(precision=18, scale=8),
-        "estWorthPrev": pl.Decimal(precision=18, scale=8),
-        "archivedWorth": pl.Decimal(precision=18, scale=8),
-        "privateAssetsWorth": pl.Decimal(precision=18, scale=8),
-    }
-
-
-def get_assets_schema():
-    """Schema for assets data"""
-    return {
-        "date": pl.Date,
-        "personName": pl.Categorical,
-        "companyName": pl.Categorical,
-        "currencyCode": pl.Categorical,
-        "currentPrice": pl.Decimal(precision=18, scale=11),
-        "exchange": pl.Categorical,
-        "exchangeRate": pl.Decimal(precision=18, scale=8),
-        "exerciseOptionPrice": pl.Decimal(precision=18, scale=11),
-        "interactive": pl.Boolean,
-        "numberOfShares": pl.Decimal(precision=18, scale=2),
-        "sharePrice": pl.Decimal(precision=18, scale=11),
-        "ticker": pl.Categorical,
-    }
+# Import our data library
+from data_lib import (
+    get_billionaires_schema,
+    get_assets_schema,
+    load_dataset,
+    save_dataset,
+    create_empty_dataset,
+)
 
 
 def fetch_forbes_data(session):
@@ -293,19 +264,17 @@ def apply_schema_transformations(df, target_schema):
     return df.select(column_expressions).select(list(target_schema.keys()))
 
 
-def load_or_create_parquet(file_path, schema_func):
-    """Load existing parquet file or create empty DataFrame with correct schema"""
-
+def load_or_create_dataset(file_path, dataset_type):
+    """Load existing dataset or create empty one with correct schema"""
     if file_path.exists():
         print(f"📖 Loading existing {file_path.name}...")
-        return pl.read_parquet(file_path)
+        return load_dataset(file_path, dataset_type, enforce_schema=True)
     else:
         print(f"🆕 Creating new {file_path.name} (file doesn't exist)...")
-        schema = schema_func()
-        return pl.DataFrame(schema=schema).select(list(schema.keys()))
+        return create_empty_dataset(dataset_type)
 
 
-def update_dataset(new_df, existing_df, current_date, dataset_name, sort_columns):
+def update_dataset(new_df, existing_df, current_date, dataset_name, dataset_type):
     """Update dataset by removing existing date data and adding new data"""
 
     current_date_obj = datetime.strptime(current_date, "%Y%m%d").date()
@@ -328,10 +297,7 @@ def update_dataset(new_df, existing_df, current_date, dataset_name, sort_columns
         combined_df = new_df
         print(f"🆕 Created new dataset with {len(new_df)} records")
 
-    print(f"🔀 Sorting {dataset_name} by {', '.join(sort_columns)}...")
-    sorted_df = combined_df.sort(sort_columns)
-
-    return sorted_df
+    return combined_df
 
 
 def main():
@@ -407,10 +373,10 @@ def main():
             print("   ✅ No files modified (dry run)")
             return True
 
-        existing_billionaires = load_or_create_parquet(
-            billionaires_path, get_billionaires_schema
+        existing_billionaires = load_or_create_dataset(
+            billionaires_path, "billionaires"
         )
-        existing_assets = load_or_create_parquet(assets_path, get_assets_schema)
+        existing_assets = load_or_create_dataset(assets_path, "assets")
 
         print("\n" + "=" * 60)
         print("UPDATING BILLIONAIRES DATASET")
@@ -419,30 +385,21 @@ def main():
             existing_billionaires,
             current_date,
             "billionaires",
-            ["personName", "date"],
+            "billionaires",
         )
 
         print("\n" + "=" * 60)
         print("UPDATING ASSETS DATASET")
         final_assets = update_dataset(
-            new_assets,
-            existing_assets,
-            current_date,
-            "assets",
-            ["personName", "companyName", "interactive", "date"],
+            new_assets, existing_assets, current_date, "assets", "assets"
         )
 
         print("\n" + "=" * 60)
         print("SAVING UPDATED DATASETS")
-        print(f"💾 Saving billionaires to {billionaires_path} (brotli compression)...")
-        final_billionaires.write_parquet(
-            billionaires_path, compression="brotli", compression_level=11
-        )
 
-        print(f"💾 Saving assets to {assets_path} (brotli compression)...")
-        final_assets.write_parquet(
-            assets_path, compression="brotli", compression_level=11
-        )
+        # Use our library functions to save with proper sorting and compression
+        save_dataset(final_billionaires, billionaires_path, "billionaires")
+        save_dataset(final_assets, assets_path, "assets")
 
         print("\n" + "=" * 60)
         print("✅ UPDATE COMPLETED")

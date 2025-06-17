@@ -5,21 +5,11 @@ from pathlib import Path
 import sys
 from datetime import datetime
 
+# Import our data library
+from data_lib import load_billionaires_data, save_billionaires_data
+
 # Enable string cache to handle categorical comparisons
 pl.enable_string_cache()
-
-
-def load_billionaires_data(parquet_path):
-    """Load billionaires dataset from parquet file"""
-    if not parquet_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {parquet_path}")
-
-    print(f"📖 Loading billionaires dataset from {parquet_path}")
-    df = pl.read_parquet(parquet_path)
-    print(f"✅ Loaded {len(df):,} records from {df['date'].n_unique()} unique dates")
-    print(f"📅 Date range: {df['date'].min()} to {df['date'].max()}")
-
-    return df
 
 
 def find_canonical_identity_values(df, identity_key_columns=None):
@@ -370,21 +360,6 @@ def show_example_fixes(original_df, fixed_df, identity_key_columns, num_examples
             )
 
 
-def save_fixed_data(fixed_df, output_path, format_type="parquet"):
-    """Save the dataset with fixed identity data"""
-
-    print(f"\n💾 Saving fixed dataset to {output_path}")
-
-    if format_type.lower() == "csv":
-        fixed_df.write_csv(output_path)
-    elif format_type.lower() == "parquet":
-        fixed_df.write_parquet(output_path, compression="brotli", compression_level=11)
-    else:
-        raise ValueError(f"Unsupported format: {format_type}")
-
-    print(f"✅ Saved {len(fixed_df):,} records with fixed identity data")
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Fix billionaire identity inconsistencies (lastName, birthDate and gender) while preserving all time-series data"
@@ -444,7 +419,7 @@ def main():
     )
 
     try:
-        # Load the dataset
+        # Load the dataset using our library
         df = load_billionaires_data(billionaires_path)
 
         # Find canonical identity values
@@ -461,7 +436,13 @@ def main():
 
         # Save results (unless dry run)
         if not args.dry_run:
-            save_fixed_data(fixed_df, output_path, args.format)
+            if args.format == "parquet":
+                # Use our library function for parquet (with proper sorting and compression)
+                save_billionaires_data(fixed_df, output_path)
+            else:
+                # For CSV, write directly
+                fixed_df.write_csv(output_path)
+                print(f"✅ Saved {len(fixed_df):,} records to {output_path}")
         else:
             print(
                 f"\n🔍 DRY RUN - Would save {len(fixed_df):,} records with fixed identity data to {output_path}"
