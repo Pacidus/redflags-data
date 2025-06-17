@@ -3,20 +3,20 @@ import polars as pl
 import argparse
 from pathlib import Path
 import sys
-from data_lib import load_billionaires_data
+from data_lib import load_data
 
 
 def analyze_combinations(df):
     """Analyze unique identity combinations"""
-    identity_cols = ["personName", "lastName", "birthDate", "gender"]
-    unique_combs = df.select(identity_cols).unique()
-    print(f"\nUnique identity combinations: {len(unique_combs):,}")
-    print(f"Unique person names: {df['personName'].n_unique():,}")
-    return unique_combs
+    cols = ["personName", "lastName", "birthDate", "gender"]
+    unique = df.select(cols).unique()
+    print(f"\nUnique combinations: {len(unique):,}")
+    print(f"Unique names: {df['personName'].n_unique():,}")
+    return unique
 
 
 def find_inconsistencies(df):
-    """Find people with inconsistent identity data"""
+    """Find people with inconsistent data"""
     grouped = (
         df.select(["personName", "lastName", "birthDate", "gender"])
         .unique()
@@ -32,16 +32,15 @@ def find_inconsistencies(df):
         (pl.col("bd_count") > 1) | (pl.col("gender_count") > 1)
     )
 
-    print(f"\nPeople with inconsistent data: {len(inconsistent)}")
+    print(f"\nInconsistent people: {len(inconsistent)}")
     if len(inconsistent) > 0:
         print(inconsistent)
-
     return inconsistent
 
 
 def check_missing(df):
-    """Check for missing data in identity fields"""
-    print("\nMissing data analysis:")
+    """Check missing data"""
+    print("\nMissing data:")
     results = {}
     for col in ["personName", "lastName", "birthDate", "gender"]:
         nulls = df[col].null_count()
@@ -57,33 +56,30 @@ def check_missing(df):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Billionaires dataset sanity check")
-    parser.add_argument("--parquet-dir", default="data", help="Data directory")
-    parser.add_argument("--limit", type=int, default=50, help="Display limit")
-    parser.add_argument("--output-report", help="Output file path")
+    parser = argparse.ArgumentParser(description="Dataset sanity check")
+    parser.add_argument("--parquet-dir", default="data")
+    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--output-report", help="Output file")
     args = parser.parse_args()
 
     try:
-        df = load_billionaires_data(Path(args.parquet_dir) / "billionaires.parquet")
+        df = load_data(Path(args.parquet_dir) / "billionaires.parquet", "billionaires")
         print(f"Total records: {len(df):,}")
 
-        # Core analysis
-        unique_combs = analyze_combinations(df)
+        unique = analyze_combinations(df)
         inconsistencies = find_inconsistencies(df)
-        missing_data = check_missing(df)
+        missing = check_missing(df)
 
-        # Display results
-        print(f"\nFirst {args.limit} identity combinations:")
-        print(unique_combs.head(args.limit))
+        print(f"\nFirst {args.limit} combinations:")
+        print(unique.head(args.limit))
 
-        # Save report if requested
         if args.output_report:
-            out_path = Path(args.output_report)
-            if out_path.suffix == ".csv":
-                unique_combs.write_csv(out_path)
+            path = Path(args.output_report)
+            if path.suffix == ".csv":
+                unique.write_csv(path)
             else:
-                unique_combs.write_parquet(out_path)
-            print(f"\nReport saved to {out_path}")
+                unique.write_parquet(path)
+            print(f"\nSaved to {path}")
 
     except Exception as e:
         print(f"Error: {e}")

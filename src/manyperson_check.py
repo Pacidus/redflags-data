@@ -3,34 +3,30 @@ import polars as pl
 import argparse
 from pathlib import Path
 import sys
+from data_lib import load_data
 
 pl.enable_string_cache()
-
-
-def load_data(parquet_path):
-    print(f"📖 Loading dataset from {parquet_path}")
-    df = pl.read_parquet(parquet_path)
-    print(f"✅ Loaded {len(df):,} records")
-    return df
 
 
 def find_conflicts(df):
     print(f"\n🔍 Analyzing personName → lastName relationships...")
 
-    # Clean and aggregate data
+    # Clean and aggregate
     lastname_dates = (
         df.with_columns(
             pl.when(pl.col("lastName") == "").then(None).otherwise(pl.col("lastName"))
         )
         .group_by(["personName", "lastName"])
         .agg(
-            pl.col("date").min().alias("first_appearance"),
-            pl.col("date").max().alias("last_appearance"),
-            pl.col("date").count().alias("appearance_count"),
+            [
+                pl.col("date").min().alias("first_appearance"),
+                pl.col("date").max().alias("last_appearance"),
+                pl.col("date").count().alias("appearance_count"),
+            ]
         )
     )
 
-    # Identify conflicts
+    # Find conflicts
     conflicts = (
         lastname_dates.group_by("personName")
         .agg(pl.col("lastName").n_unique().alias("unique_lastnames"))
@@ -53,7 +49,6 @@ def display_conflicts(conflicts, lastname_dates, limit=20):
     for row in conflicts.head(limit).iter_rows(named=True):
         print(f"👤 {row['personName']} → {row['unique_lastnames']} lastNames:")
 
-        # Show chronological usage
         details = lastname_dates.filter(pl.col("personName") == row["personName"]).sort(
             "first_appearance"
         )
@@ -65,23 +60,19 @@ def display_conflicts(conflicts, lastname_dates, limit=20):
 
 def main():
     parser = argparse.ArgumentParser(description="Find personName/lastName conflicts")
-    parser.add_argument("--parquet-dir", default="data", help="Data directory")
-    parser.add_argument(
-        "--limit", type=int, default=20, help="Max conflicts to display"
-    )
-    parser.add_argument("--output-report", type=str, help="Output file for report")
+    parser.add_argument("--parquet-dir", default="data")
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--output-report", type=str, help="Output file")
     args = parser.parse_args()
 
-    # Setup paths
     data_path = Path(args.parquet_dir) / "billionaires.parquet"
     print(f"🔍 Processing: {data_path}")
 
     try:
-        df = load_data(data_path)
+        df = load_data(data_path, "billionaires")
         conflicts, lastname_dates = find_conflicts(df)
         display_conflicts(conflicts, lastname_dates, args.limit)
 
-        # Summary
         print("\n" + "=" * 80)
         print(
             f"📊 SUMMARY: {len(conflicts):,} conflicts out of {df['personName'].n_unique():,} names"

@@ -6,21 +6,12 @@ from datetime import datetime
 from pathlib import Path
 import argparse
 import sys
-
-# Import our data library
-from data_lib import (
-    get_billionaires_schema,
-    get_assets_schema,
-    load_dataset,
-    save_dataset,
-    create_empty_dataset,
-)
+from data_lib import load_data, save_data, get_schema, create_empty
 
 
 def fetch_forbes_data(session):
     """Fetch current data from Forbes API"""
-
-    forbes_urls = [
+    urls = [
         "https://www.forbes.com/forbesapi/person/rtb/0/position/true.json",
         "https://www.forbes.com/forbesapi/person/rtb/0/-estWorthPrev/true.json?fields=rank,uri,personName,lastName,gender,source,industries,countryOfCitizenship,birthDate,finalWorth,estWorthPrev,imageExists,squareImage,listUri",
         "https://www.forbes.com/forbesapi/person/rtb/0/-estWorthPrev/true.json",
@@ -28,13 +19,11 @@ def fetch_forbes_data(session):
 
     print("🌐 Fetching live data from Forbes API...")
 
-    for i, url in enumerate(forbes_urls, 1):
-        print(f"📡 Trying URL {i}/{len(forbes_urls)}: {url[:80]}...")
-
+    for i, url in enumerate(urls, 1):
+        print(f"📡 Trying URL {i}/{len(urls)}...")
         try:
             response = session.get(url, timeout=30)
             response.raise_for_status()
-
             data = response.json()
 
             records = (
@@ -43,26 +32,20 @@ def fetch_forbes_data(session):
                 or data.get("data", [])
             )
 
-            if records and len(records) > 0:
-                print(f"✅ Successfully fetched {len(records)} records from Forbes")
+            if records:
+                print(f"✅ Found {len(records)} records")
                 return data
-            else:
-                print(f"⚠️  URL {i} returned empty data, trying next...")
+            print(f"⚠️  Empty data, trying next...")
 
-        except requests.exceptions.RequestException as e:
-            print(f"❌ URL {i} failed: {e}")
-            continue
-        except json.JSONDecodeError as e:
-            print(f"❌ URL {i} returned invalid JSON: {e}")
-            continue
+        except Exception as e:
+            print(f"❌ Failed: {e}")
 
-    print("❌ All Forbes URLs failed to return valid data")
+    print("❌ All URLs failed")
     return None
 
 
 def process_forbes_data(data, current_date):
-    """Process Forbes JSON data into billionaires and assets DataFrames"""
-
+    """Process Forbes JSON into dataframes"""
     print("🔄 Processing Forbes data...")
 
     records = (
@@ -72,257 +55,181 @@ def process_forbes_data(data, current_date):
     )
 
     if not records:
-        raise ValueError("No records found in Forbes data")
+        raise ValueError("No records found")
 
     billionaires_data = []
     assets_data = []
 
-    for record in records:
+    for r in records:
+        # Billionaire record
         billionaire = {
             "date": current_date,
-            "personName": (
-                str(record.get("personName", "")) if record.get("personName") else ""
-            ),
-            "lastName": (
-                str(record.get("lastName", "")) if record.get("lastName") else ""
-            ),
-            "birthDate": (
-                str(record.get("birthDate", "")) if record.get("birthDate") else ""
-            ),
-            "gender": str(record.get("gender", "")) if record.get("gender") else "",
-            "countryOfCitizenship": (
-                str(record.get("countryOfCitizenship", ""))
-                if record.get("countryOfCitizenship")
-                else ""
-            ),
-            "city": str(record.get("city", "")) if record.get("city") else "",
-            "state": str(record.get("state", "")) if record.get("state") else "",
-            "source": str(record.get("source", "")) if record.get("source") else "",
-            "industries": (
-                str(record.get("industries", "")) if record.get("industries") else ""
-            ),
+            "personName": str(r.get("personName", "")),
+            "lastName": str(r.get("lastName", "")),
+            "birthDate": str(r.get("birthDate", "")),
+            "gender": str(r.get("gender", "")),
+            "countryOfCitizenship": str(r.get("countryOfCitizenship", "")),
+            "city": str(r.get("city", "")),
+            "state": str(r.get("state", "")),
+            "source": str(r.get("source", "")),
+            "industries": str(r.get("industries", "")),
             "finalWorth": (
-                str(record.get("finalWorth", ""))
-                if record.get("finalWorth") is not None
-                else ""
+                str(r.get("finalWorth", "")) if r.get("finalWorth") is not None else ""
             ),
             "estWorthPrev": (
-                str(record.get("estWorthPrev", ""))
-                if record.get("estWorthPrev") is not None
+                str(r.get("estWorthPrev", ""))
+                if r.get("estWorthPrev") is not None
                 else ""
             ),
             "archivedWorth": (
-                str(record.get("archivedWorth", ""))
-                if record.get("archivedWorth") is not None
+                str(r.get("archivedWorth", ""))
+                if r.get("archivedWorth") is not None
                 else ""
             ),
             "privateAssetsWorth": (
-                str(record.get("privateAssetsWorth", ""))
-                if record.get("privateAssetsWorth") is not None
+                str(r.get("privateAssetsWorth", ""))
+                if r.get("privateAssetsWorth") is not None
                 else ""
             ),
         }
         billionaires_data.append(billionaire)
 
-        for asset in record.get("financialAssets", []):
-            asset_record = {
+        # Asset records
+        for a in r.get("financialAssets", []):
+            asset = {
                 "date": current_date,
-                "personName": (
-                    str(record.get("personName", ""))
-                    if record.get("personName")
-                    else ""
-                ),
-                "companyName": (
-                    str(asset.get("companyName", ""))
-                    if asset.get("companyName")
-                    else ""
-                ),
-                "currencyCode": (
-                    str(asset.get("currencyCode", ""))
-                    if asset.get("currencyCode")
-                    else ""
-                ),
+                "personName": str(r.get("personName", "")),
+                "companyName": str(a.get("companyName", "")),
+                "currencyCode": str(a.get("currencyCode", "")),
                 "currentPrice": (
-                    str(asset.get("currentPrice", ""))
-                    if asset.get("currentPrice") is not None
+                    str(a.get("currentPrice", ""))
+                    if a.get("currentPrice") is not None
                     else ""
                 ),
-                "exchange": (
-                    str(asset.get("exchange", "")) if asset.get("exchange") else ""
-                ),
+                "exchange": str(a.get("exchange", "")),
                 "exchangeRate": (
-                    str(asset.get("exchangeRate", ""))
-                    if asset.get("exchangeRate") is not None
+                    str(a.get("exchangeRate", ""))
+                    if a.get("exchangeRate") is not None
                     else ""
                 ),
                 "exerciseOptionPrice": (
-                    str(asset.get("exerciseOptionPrice", ""))
-                    if asset.get("exerciseOptionPrice") is not None
+                    str(a.get("exerciseOptionPrice", ""))
+                    if a.get("exerciseOptionPrice") is not None
                     else ""
                 ),
                 "interactive": (
-                    str(asset.get("interactive", ""))
-                    if asset.get("interactive") is not None
+                    str(a.get("interactive", ""))
+                    if a.get("interactive") is not None
                     else ""
                 ),
                 "numberOfShares": (
-                    str(asset.get("numberOfShares", ""))
-                    if asset.get("numberOfShares") is not None
+                    str(a.get("numberOfShares", ""))
+                    if a.get("numberOfShares") is not None
                     else ""
                 ),
                 "sharePrice": (
-                    str(asset.get("sharePrice", ""))
-                    if asset.get("sharePrice") is not None
+                    str(a.get("sharePrice", ""))
+                    if a.get("sharePrice") is not None
                     else ""
                 ),
-                "ticker": str(asset.get("ticker", "")) if asset.get("ticker") else "",
+                "ticker": str(a.get("ticker", "")),
             }
-            assets_data.append(asset_record)
+            assets_data.append(asset)
 
-    billionaires_df = pl.DataFrame(billionaires_data)
-    assets_df = (
-        pl.DataFrame(assets_data)
-        if assets_data
-        else pl.DataFrame(schema={k: pl.Utf8 for k in get_assets_schema().keys()})
+    print(f"✅ Processed {len(billionaires_data)} billionaires")
+    print(f"✅ Processed {len(assets_data)} assets")
+
+    return pl.DataFrame(billionaires_data), (
+        pl.DataFrame(assets_data) if assets_data else create_empty("assets")
     )
 
-    print(f"✅ Processed {len(billionaires_df)} billionaire records")
-    print(f"✅ Processed {len(assets_df)} asset records")
 
-    return billionaires_df, assets_df
+def apply_schema_transformations(df, schema):
+    """Apply schema transformations"""
+    exprs = []
 
-
-def apply_schema_transformations(df, target_schema):
-    """Apply schema transformations without float conversion"""
-
-    column_expressions = []
-
-    for col_name, dtype in target_schema.items():
-        if col_name not in df.columns:
+    for col, dtype in schema.items():
+        if col not in df.columns:
             if dtype == pl.Categorical:
-                expr = pl.lit(None).cast(pl.Utf8).cast(pl.Categorical)
+                expr = pl.lit(None).cast(pl.Utf8).cast(pl.Categorical).alias(col)
             else:
-                expr = pl.lit(None).cast(dtype)
-            column_expressions.append(expr.alias(col_name))
+                expr = pl.lit(None).cast(dtype).alias(col)
+            exprs.append(expr)
             continue
 
-        if col_name == "birthDate":
+        # Handle specific transformations
+        if col == "birthDate":
             expr = (
-                pl.when((pl.col(col_name) == "") | pl.col(col_name).is_null())
+                pl.when((pl.col(col) == "") | pl.col(col).is_null())
                 .then(None)
                 .otherwise(
-                    pl.col(col_name)
+                    pl.col(col)
                     .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
                     .fill_null(
-                        pl.when(pl.col(col_name).str.len_chars() > 0)
+                        pl.when(pl.col(col).str.len_chars() > 0)
                         .then(
-                            pl.col(col_name)
+                            pl.col(col)
                             .cast(pl.Int64, strict=False)
-                            .cast(pl.Datetime(time_unit="ms"))
+                            .cast(pl.Datetime("ms"))
                             .cast(pl.Date)
                         )
                         .otherwise(None)
                     )
                 )
-                .alias(col_name)
             )
-        elif dtype == pl.Date:
-            if col_name == "date":
-                expr = pl.col(col_name).str.strptime(pl.Date, "%Y%m%d", strict=False)
-            else:
-                expr = pl.col(col_name).str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+        elif dtype == pl.Date and col == "date":
+            expr = pl.col(col).str.strptime(pl.Date, "%Y%m%d", strict=False)
         elif "Decimal" in str(dtype):
             expr = (
-                pl.when(pl.col(col_name) == "")
-                .then(None)
-                .otherwise(pl.col(col_name))
-                .cast(dtype)
-                .alias(col_name)
+                pl.when(pl.col(col) == "").then(None).otherwise(pl.col(col)).cast(dtype)
             )
         elif dtype == pl.Boolean:
             expr = (
-                pl.when(pl.col(col_name).is_in(["True", "true", "1", "TRUE"]))
+                pl.when(pl.col(col).is_in(["True", "true", "1"]))
                 .then(True)
-                .when(pl.col(col_name).is_in(["False", "false", "0", "FALSE"]))
+                .when(pl.col(col).is_in(["False", "false", "0"]))
                 .then(False)
                 .otherwise(None)
-                .alias(col_name)
             )
         elif dtype == pl.Categorical:
             expr = (
-                pl.when(pl.col(col_name) == "")
+                pl.when(pl.col(col) == "")
                 .then(None)
-                .otherwise(pl.col(col_name))
+                .otherwise(pl.col(col))
                 .cast(pl.Categorical)
-                .alias(col_name)
             )
         else:
-            expr = pl.col(col_name).cast(dtype).alias(col_name)
+            expr = pl.col(col).cast(dtype)
 
-        column_expressions.append(expr)
+        exprs.append(expr.alias(col))
 
-    return df.select(column_expressions).select(list(target_schema.keys()))
-
-
-def load_or_create_dataset(file_path, dataset_type):
-    """Load existing dataset or create empty one with correct schema"""
-    if file_path.exists():
-        print(f"📖 Loading existing {file_path.name}...")
-        return load_dataset(file_path, dataset_type, enforce_schema=True)
-    else:
-        print(f"🆕 Creating new {file_path.name} (file doesn't exist)...")
-        return create_empty_dataset(dataset_type)
+    return df.select(exprs).select(list(schema.keys()))
 
 
-def update_dataset(new_df, existing_df, current_date, dataset_name, dataset_type):
-    """Update dataset by removing existing date data and adding new data"""
-
-    current_date_obj = datetime.strptime(current_date, "%Y%m%d").date()
-
+def update_dataset(new_df, existing_df, current_date_obj, dataset_name):
+    """Update dataset with new data"""
     if len(existing_df) > 0:
-        existing_dates = existing_df.select("date").unique().to_series().to_list()
-        if current_date_obj in existing_dates:
-            print(
-                f"⚠️  Date {current_date} already exists in {dataset_name}, removing old data..."
-            )
+        if current_date_obj in existing_df["date"].unique():
+            print(f"⚠️  Removing old {current_date_obj} data...")
             existing_df = existing_df.filter(pl.col("date") != current_date_obj)
-            print(f"✅ Removed old data for {current_date}")
 
-    if len(existing_df) > 0:
-        combined_df = pl.concat([existing_df, new_df], how="vertical_relaxed")
-        print(
-            f"🔄 Combined {len(existing_df)} existing + {len(new_df)} new = {len(combined_df)} total records"
-        )
-    else:
-        combined_df = new_df
-        print(f"🆕 Created new dataset with {len(new_df)} records")
-
-    return combined_df
+    combined = (
+        pl.concat([existing_df, new_df], how="vertical_relaxed")
+        if len(existing_df) > 0
+        else new_df
+    )
+    print(f"🔄 Total records: {len(combined):,}")
+    return combined
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Update Forbes parquet dataset with live data"
-    )
+    parser = argparse.ArgumentParser(description="Update Forbes dataset")
+    parser.add_argument("--parquet-dir", default="data")
     parser.add_argument(
-        "--parquet-dir",
-        default="data",
-        help="Directory containing parquet files",
+        "--user-agent", default="Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N)"
     )
-    parser.add_argument(
-        "--user-agent",
-        default="Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N)",
-        help="User agent for requests",
-    )
-    parser.add_argument(
-        "--timeout", type=int, default=30, help="Request timeout in seconds"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done without making changes",
-    )
-
+    parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     parquet_dir = Path(args.parquet_dir)
@@ -330,86 +237,78 @@ def main():
 
     billionaires_path = parquet_dir / "billionaires.parquet"
     assets_path = parquet_dir / "assets.parquet"
-
     current_date = datetime.now().strftime("%Y%m%d")
 
     print("🚀 Forbes Live Data Updater")
     print("=" * 60)
-    print(f"📅 Current date: {current_date}")
-    print(f"📁 Parquet directory: {parquet_dir.absolute()}")
+    print(f"📅 Date: {current_date}")
+    print(f"📁 Directory: {parquet_dir.absolute()}")
     print(f"🔒 Dry run: {args.dry_run}")
-    print()
 
     session = requests.Session()
-    session.headers = {
-        "User-Agent": args.user_agent,
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    session.headers = {"User-Agent": args.user_agent, "Accept": "application/json"}
 
     try:
+        # Fetch data
         forbes_data = fetch_forbes_data(session)
         if not forbes_data:
-            print("❌ Failed to fetch Forbes data")
             return False
 
+        # Process data
         new_billionaires_raw, new_assets_raw = process_forbes_data(
             forbes_data, current_date
         )
 
-        print("🔄 Applying schema transformations to billionaires...")
+        # Apply schemas
+        print("🔄 Applying schemas...")
         new_billionaires = apply_schema_transformations(
-            new_billionaires_raw, get_billionaires_schema()
+            new_billionaires_raw, get_schema("billionaires")
         )
-
-        print("🔄 Applying schema transformations to assets...")
-        new_assets = apply_schema_transformations(new_assets_raw, get_assets_schema())
+        new_assets = apply_schema_transformations(new_assets_raw, get_schema("assets"))
 
         if args.dry_run:
-            print("\n🔍 DRY RUN - Would process:")
+            print(f"\n🔍 DRY RUN - Would process:")
             print(f"   📊 Billionaires: {len(new_billionaires)} records")
             print(f"   💰 Assets: {len(new_assets)} records")
-            print(f"   📅 Date: {current_date}")
-            print("   ✅ No files modified (dry run)")
             return True
 
-        existing_billionaires = load_or_create_dataset(
-            billionaires_path, "billionaires"
+        # Load existing data
+        existing_billionaires = (
+            load_data(billionaires_path, "billionaires")
+            if billionaires_path.exists()
+            else create_empty("billionaires")
         )
-        existing_assets = load_or_create_dataset(assets_path, "assets")
+        existing_assets = (
+            load_data(assets_path, "assets")
+            if assets_path.exists()
+            else create_empty("assets")
+        )
+
+        # Update datasets
+        current_date_obj = datetime.strptime(current_date, "%Y%m%d").date()
 
         print("\n" + "=" * 60)
-        print("UPDATING BILLIONAIRES DATASET")
+        print("UPDATING BILLIONAIRES")
         final_billionaires = update_dataset(
-            new_billionaires,
-            existing_billionaires,
-            current_date,
-            "billionaires",
-            "billionaires",
+            new_billionaires, existing_billionaires, current_date_obj, "billionaires"
         )
 
         print("\n" + "=" * 60)
-        print("UPDATING ASSETS DATASET")
+        print("UPDATING ASSETS")
         final_assets = update_dataset(
-            new_assets, existing_assets, current_date, "assets", "assets"
+            new_assets, existing_assets, current_date_obj, "assets"
         )
 
+        # Save
         print("\n" + "=" * 60)
-        print("SAVING UPDATED DATASETS")
-
-        # Use our library functions to save with proper sorting and compression
-        save_dataset(final_billionaires, billionaires_path, "billionaires")
-        save_dataset(final_assets, assets_path, "assets")
+        print("SAVING DATASETS")
+        save_data(final_billionaires, billionaires_path, "billionaires")
+        save_data(final_assets, assets_path, "assets")
 
         print("\n" + "=" * 60)
         print("✅ UPDATE COMPLETED")
-        print("=" * 60)
-        print(f"📊 Final billionaires: {len(final_billionaires):,} records")
-        print(f"💰 Final assets: {len(final_assets):,} records")
-        print(f"📅 Data date: {current_date}")
-        print(f"📁 Files saved to: {parquet_dir.absolute()}")
-        print(f"🗜️  Compression: brotli (level 11)")
-        print(f"🔒 Decimal precision preserved (no float conversion)")
+        print(f"📊 Billionaires: {len(final_billionaires):,} records")
+        print(f"💰 Assets: {len(final_assets):,} records")
 
         return True
 
