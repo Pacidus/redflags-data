@@ -109,6 +109,8 @@ def deduplicate_assets(df):
                 pl.col("currencyCode").fill_null(""),
                 pl.col("exchange").fill_null(""),
                 pl.col("interactive").cast(pl.Utf8).fill_null(""),
+                pl.col("exchangeRate").cast(pl.Utf8).fill_null(""),
+                pl.col("exerciseOptionPrice").cast(pl.Utf8).fill_null(""),
             ],
             separator="|",
         ).alias("dedup_key")
@@ -232,6 +234,8 @@ def analyze_duplicates(df, dataset_type):
                         pl.col("currencyCode").fill_null(""),
                         pl.col("exchange").fill_null(""),
                         pl.col("interactive").cast(pl.Utf8).fill_null(""),
+                        pl.col("exchangeRate").cast(pl.Utf8).fill_null(""),
+                        pl.col("exerciseOptionPrice").cast(pl.Utf8).fill_null(""),
                     ],
                     separator="|",
                 ).alias("dedup_key")
@@ -297,9 +301,7 @@ def main():
 
     # Strategy explanation
     print(f"\n📋 DEDUPLICATION STRATEGY:")
-    print(
-        "🏦 Billionaires: Keep record with highest finalWorth per (date, personName, lastName)"
-    )
+    print("🏦 Billionaires: Keep record with highest finalWorth per (date, personName)")
     print("💰 Assets: Keep record with highest numberOfShares per comprehensive key")
 
     success = True
